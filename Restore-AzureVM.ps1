@@ -1,10 +1,77 @@
 #Requires -Modules Az.Accounts, Az.Resources, Az.Network, Az.Storage, Az.Compute, Az.RecoveryServices
 
-# ============================================================
-#  Azure VM restore automation
-#  Doel   : Herstelomgeving klaarzetten + VM-restore begeleiden
-#  Gebruik: Voer uit als: .\Restore-AzureVM.ps1
-# ============================================================
+<#
+.SYNOPSIS
+    Automatisering voor het herstellen van een Azure Virtual Machine.
+
+.DESCRIPTION
+    Dit script zet een herstelomgeving klaar en begeleidt het restore-proces van een Azure VM.
+    Ondersteunt authenticatie via Service Principal en Modern Authentication.
+    Kan interactief gebruikt worden, of via onderstaande optionele parameters.
+
+.PARAMETER TenantID
+    (Optioneel) De Azure Active Directory Tenant ID.
+
+.PARAMETER AppId
+    (Optioneel) De applicatie-id van de Service Principal voor authenticatie.
+
+.PARAMETER AppSecret
+    (Optioneel) Het geheim van de Service Principal.
+
+.PARAMETER UseExistingSession
+    (Switch, optioneel) Gebruik een reeds bestaande Azure sessie.
+
+.PARAMETER SkipConfirmation
+    (Switch, optioneel) Sla bevestigingsvragen over.
+
+.PARAMETER OriginalVM
+    (Optioneel) Naam van de oorspronkelijke VM die hersteld moet worden.
+
+.PARAMETER Subscription
+    (Optioneel) Naam of ID van de Azure Subscription.
+
+.PARAMETER CustomerName
+    (Optioneel) Naam van de klant.
+
+.PARAMETER Ticket
+    (Optioneel) Ticketnummer of referentie voor deze restore-actie.
+
+.PARAMETER CreatedBy
+    (Optioneel) Naam van de uitvoerder van het script. Voor tagging
+
+.PARAMETER Region
+    (Optioneel) Azure-regio waar de herstelomgeving wordt opgebouwd.
+
+.PARAMETER RecoveryPointIndex
+    (Optioneel) Index van het te gebruiken herstelpunt.
+
+.EXAMPLE
+    .\Restore-AzureVM.ps1 -TenantID "0123456" -AppId "123456" -AppSecret "ABCDEFG" `
+        -OriginalVM "DC01" -Subscription "MySub" -CustomerName "Contoso" `
+        -Ticket "OT2606-01234" -CreatedBy "Jan de Vries" -Region "westeurope" `
+        -RecoveryPointIndex 1 -SkipConfirmation
+
+.NOTES
+    Auteur  : Jordy Hoebergen
+    Versie  : 0.2
+    Laatst aangepast: 2026-07-01
+#>
+
+[CmdletBinding()]
+param(
+    [string] $TenantId,             # Tenant ID
+    [string] $AppId,                # Service Principal Application ID
+    [string] $AppSecret,            # Service Principal Secret
+    [switch] $UseExistingSession,   # Huidige AZ sessie hergebruiken
+    [switch] $SkipConfirmation,     # Sla de samenvatting-bevestiging over
+    [string] $OriginalVM,           # Naam van de te restoren VM
+    [string] $Subscription,         # Naam of ID van de Azure subscription
+    [string] $CustomerName,         # Klantnaam (alleen letters en cijfers)
+    [string] $Ticket,               # Ticketnummer (bijv. OT2606-01234)
+    [string] $CreatedBy,            # Volledige naam voor de CreatedBy-tag
+    [string] $Region,               # Azure-regio (standaard: westeurope)
+    [int]    $RecoveryPointIndex    # Index van herstelpunt (standaard: 1)
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -41,15 +108,34 @@ function Write-Info {
 # STAP 1 – LOGIN EN SUBSCRIPTION SELECTIE
 # ─────────────────────────────────────────────────────────────
 
-Write-Header "STAP 0 - Huidige Azure credentials uitloggen"
-
-Disconnect-AzAccount
-
 Write-Header "STAP 1 – Azure Login"
 
-Write-Step "Inloggen bij Azure... (inlogscherm kan verstopt zijn achter het huidige venster)"
-Connect-AzAccount | Out-Null
-Write-OK "Succesvol ingelogd."
+if ($UseExistingSession) {
+    # ── Optie 2: bestaande sessie hergebruiken ────────────────
+    $currentAccount = Get-AzContext -ErrorAction SilentlyContinue
+    if ($null -eq $currentAccount -or $null -eq $currentAccount.Account) {
+        Write-Step "Inloggen bij Azure... (inlogscherm kan verstopt zijn achter het huidige venster)"
+        Connect-AzAccount | Out-Null
+        Write-OK "Succesvol ingelogd."
+    }
+    Write-OK "Bestaande sessie hergebruikt: $($currentAccount.Account.Id)"
+
+} elseif (-not [string]::IsNullOrWhiteSpace($AppId) -and
+          -not [string]::IsNullOrWhiteSpace($AppSecret) -and
+          -not [string]::IsNullOrWhiteSpace($TenantId)) {
+    # ── Optie 1: service principal ────────────────────────────
+    Write-Step "Inloggen via Service Principal..."
+    $secureSecret = ConvertTo-SecureString $AppSecret -AsPlainText -Force
+    $credential   = New-Object System.Management.Automation.PSCredential($AppId, $secureSecret)
+    Connect-AzAccount -ServicePrincipal -Credential $credential -Tenant $TenantId | Out-Null
+    Write-OK "Succesvol ingelogd via Service Principal: $AppId"
+
+} else {
+    # ── Optie 3: interactief (fallback) ───────────────────────
+    Write-Step "Inloggen bij Azure... (inlogscherm kan verstopt zijn achter het huidige venster)"
+    Connect-AzAccount | Out-Null
+    Write-OK "Succesvol ingelogd."
+}
 
 # Haal alle subscriptions op
 $allSubs = Get-AzSubscription | Sort-Object Name
@@ -58,26 +144,40 @@ if ($allSubs.Count -eq 0) {
     exit 1
 }
 
-# Bepaal standaard index op basis van *Recovery* in de naam
-$defaultSubIndex = 1
-for ($i = 0; $i -lt $allSubs.Count; $i++) {
-    if ($allSubs[$i].Name -like "*Recovery*") {
-        $defaultSubIndex = $i + 1
-        break
+# ── Subscription kiezen: via flag of interactief ─────────────
+if (-not [string]::IsNullOrWhiteSpace($Subscription)) {
+    # Zoek op naam of ID
+    $selectedSub = $allSubs | Where-Object {
+        $_.Name -eq $Subscription -or $_.Id -eq $Subscription
+    } | Select-Object -First 1
+
+    if ($null -eq $selectedSub) {
+        Write-Error "Subscription '$Subscription' niet gevonden. Beschikbare subscriptions:`n$(($allSubs | ForEach-Object { '  ' + $_.Name }) -join "`n")"
+        exit 1
     }
+    Write-OK "Subscription via parameter: $($selectedSub.Name)"
+} else {
+    # Interactief kiezen
+    $defaultSubIndex = 1
+    for ($i = 0; $i -lt $allSubs.Count; $i++) {
+        if ($allSubs[$i].Name -like "*Recovery*") {
+            $defaultSubIndex = $i + 1
+            break
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  Beschikbare subscriptions:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $allSubs.Count; $i++) {
+        $marker = if (($i + 1) -eq $defaultSubIndex) { "  ← standaard" } else { "" }
+        Write-Host ("  [{0,2}] {1}{2}" -f ($i + 1), $allSubs[$i].Name, $marker) -ForegroundColor White
+    }
+    Write-Host ""
+    $subChoice = Read-Host "  Kies subscriptienummer (Enter = $defaultSubIndex)"
+    if ([string]::IsNullOrWhiteSpace($subChoice)) { $subChoice = $defaultSubIndex }
+    $selectedSub = $allSubs[[int]$subChoice - 1]
 }
 
-Write-Host ""
-Write-Host "  Beschikbare subscriptions:" -ForegroundColor Cyan
-for ($i = 0; $i -lt $allSubs.Count; $i++) {
-    $marker = if (($i + 1) -eq $defaultSubIndex) { "  ← standaard" } else { "" }
-    Write-Host ("  [{0,2}] {1}{2}" -f ($i + 1), $allSubs[$i].Name, $marker) -ForegroundColor White
-}
-Write-Host ""
-$subChoice = Read-Host "  Kies subscriptienummer (Enter = $defaultSubIndex)"
-if ([string]::IsNullOrWhiteSpace($subChoice)) { $subChoice = $defaultSubIndex }
-$selectedSub = $allSubs[[int]$subChoice - 1]
-# Zet context direct — geen tweede keuze meer nodig verderop
 Set-AzContext -SubscriptionId $selectedSub.Id | Out-Null
 Write-OK "Ingelogd en subscription ingesteld: $($selectedSub.Name)"
 
@@ -88,30 +188,46 @@ Write-OK "Ingelogd en subscription ingesteld: $($selectedSub.Name)"
 Write-Header "STAP 2 – Invoer gegevens"
 
 # ── Klantnaam ─────────────────────────────────────────────────
-do {
-    $CustomerName = (Read-Host "  Klantnaam (geen spaties of speciale tekens, bijv. Contoso)").Trim()
-    if ([string]::IsNullOrWhiteSpace($CustomerName)) {
-        Write-Host "  ⚠ Klantnaam mag niet leeg zijn." -ForegroundColor Red
-    } elseif ($CustomerName -notmatch '^[a-zA-Z0-9]+$') {
-        Write-Host "  ⚠ Alleen letters en cijfers toegestaan, geen spaties of speciale tekens." -ForegroundColor Red
-        $CustomerName = ""
+if (-not [string]::IsNullOrWhiteSpace($CustomerName)) {
+    if ($CustomerName -notmatch '^[a-zA-Z0-9]+$') {
+        Write-Error "Klantnaam '$CustomerName' is ongeldig. Alleen letters en cijfers toegestaan."
+        exit 1
     }
-} while ([string]::IsNullOrWhiteSpace($CustomerName))
-Write-OK "Klantnaam: $CustomerName"
+    Write-OK "Klantnaam (parameter): $CustomerName"
+} else {
+    do {
+        $CustomerName = (Read-Host "  Klantnaam (geen spaties of speciale tekens, bijv. Contoso)").Trim()
+        if ([string]::IsNullOrWhiteSpace($CustomerName)) {
+            Write-Host "  ⚠ Klantnaam mag niet leeg zijn." -ForegroundColor Red
+        } elseif ($CustomerName -notmatch '^[a-zA-Z0-9]+$') {
+            Write-Host "  ⚠ Alleen letters en cijfers toegestaan." -ForegroundColor Red
+            $CustomerName = ""
+        }
+    } while ([string]::IsNullOrWhiteSpace($CustomerName))
+    Write-OK "Klantnaam: $CustomerName"
+}
 
 # ── Ticketnummer ──────────────────────────────────────────────
-do {
-    $TicketNumber = (Read-Host "  Ticketnummer (bijv. OT2606-01234)").Trim()
-    if ([string]::IsNullOrWhiteSpace($TicketNumber)) {
-        Write-Host "  ⚠ Ticketnummer mag niet leeg zijn." -ForegroundColor Red
-    } elseif ($TicketNumber -notmatch '^[a-zA-Z0-9\-]+$') {
-        Write-Host "  ⚠ Ticketnummer mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
-        $TicketNumber = ""
+if (-not [string]::IsNullOrWhiteSpace($Ticket)) {
+    if ($Ticket -notmatch '^[a-zA-Z0-9\-]+$') {
+        Write-Error "Ticketnummer '$Ticket' is ongeldig. Alleen letters, cijfers en koppeltekens toegestaan."
+        exit 1
     }
-} while ([string]::IsNullOrWhiteSpace($TicketNumber))
-Write-OK "Ticketnummer: $TicketNumber"
+    Write-OK "Ticketnummer (parameter): $Ticket"
+} else {
+    do {
+        $Ticket = (Read-Host "  Ticketnummer (bijv. OT2606-01234)").Trim()
+        if ([string]::IsNullOrWhiteSpace($Ticket)) {
+            Write-Host "  ⚠ Ticketnummer mag niet leeg zijn." -ForegroundColor Red
+        } elseif ($Ticket -notmatch '^[a-zA-Z0-9\-]+$') {
+            Write-Host "  ⚠ Ticketnummer mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
+            $Ticket = ""
+        }
+    } while ([string]::IsNullOrWhiteSpace($Ticket))
+    Write-OK "Ticketnummer: $Ticket"
+}
 
-# ── DC-naam (uit VM-lijst of handmatig) ───────────────────────
+# ── DC-naam ───────────────────────────────────────────────────
 Write-Step "Huidige VM's ophalen uit alle subscriptions..."
 $allVMs = @()
 foreach ($sub in $allSubs) {
@@ -130,64 +246,81 @@ foreach ($sub in $allSubs) {
 }
 Set-AzContext -SubscriptionId $selectedSub.Id | Out-Null
 
-if ($allVMs.Count -gt 0) {
-    Write-Host ""
-    Write-Host "  Gevonden VM's:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $allVMs.Count; $i++) {
-        Write-Host ("  [{0,2}] {1,-35} Sub: {2}" -f ($i + 1), $allVMs[$i].Name, $allVMs[$i].Subscription) -ForegroundColor White
+if (-not [string]::IsNullOrWhiteSpace($OriginalVM)) {
+    if ($OriginalVM -notmatch '^[a-zA-Z0-9\-]+$') {
+        Write-Error "VM-naam '$OriginalVM' is ongeldig. Alleen letters, cijfers en koppeltekens toegestaan."
+        exit 1
     }
-    Write-Host ""
-    do {
-        $vmChoice = (Read-Host "  Nummer van te restoren Domain Controller (of typ naam handmatig)").Trim()
-        if ([string]::IsNullOrWhiteSpace($vmChoice)) {
-            Write-Host "  ⚠ Keuze mag niet leeg zijn." -ForegroundColor Red
-        } elseif ($vmChoice -match '^\d+$') {
-            if ([int]$vmChoice -lt 1 -or [int]$vmChoice -gt $allVMs.Count) {
-                Write-Host "  ⚠ Kies een nummer tussen 1 en $($allVMs.Count)." -ForegroundColor Red
-                $vmChoice = ""
-            } else {
-                $DCName = $allVMs[[int]$vmChoice - 1].Name
-            }
-        } else {
-            if ($vmChoice -notmatch '^[a-zA-Z0-9\-]+$') {
-                Write-Host "  ⚠ VM-naam mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
-                $vmChoice = ""
-            } else {
-                $DCName = $vmChoice
-            }
-        }
-    } while ([string]::IsNullOrWhiteSpace($vmChoice))
+    $DCName = $OriginalVM
+    Write-OK "VM naam (parameter): $DCName"
 } else {
-    Write-Host "  ℹ Geen VM's gevonden of geen toegang. Typ de naam handmatig." -ForegroundColor Yellow
-    do {
-        $DCName = (Read-Host "  Naam van de te restoren Domain Controller").Trim()
-        if ([string]::IsNullOrWhiteSpace($DCName)) {
-            Write-Host "  ⚠ Naam mag niet leeg zijn." -ForegroundColor Red
-        } elseif ($DCName -notmatch '^[a-zA-Z0-9\-]+$') {
-            Write-Host "  ⚠ VM-naam mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
-            $DCName = ""
+    if ($allVMs.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Gevonden VM's:" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $allVMs.Count; $i++) {
+            Write-Host ("  [{0,2}] {1,-35} Sub: {2}" -f ($i + 1), $allVMs[$i].Name, $allVMs[$i].Subscription) -ForegroundColor White
         }
-    } while ([string]::IsNullOrWhiteSpace($DCName))
-}
-Write-OK "Domain Controller: $DCName"
-
-# ── Volledige naam (CreatedBy) ────────────────────────────────
-do {
-    $CreatedByName = (Read-Host "  Jouw volledige naam (voor de CreatedBy-tag, bijv. Jan de Vries)").Trim()
-    if ([string]::IsNullOrWhiteSpace($CreatedByName)) {
-        Write-Host "  ⚠ Naam mag niet leeg zijn." -ForegroundColor Red
-    } elseif ($CreatedByName -notmatch '^[a-zA-Z\s\-\.]+$') {
-        Write-Host "  ⚠ Naam mag alleen letters, spaties, koppeltekens en punten bevatten." -ForegroundColor Red
-        $CreatedByName = ""
-    } elseif ($CreatedByName.Length -lt 2) {
-        Write-Host "  ⚠ Naam is te kort." -ForegroundColor Red
-        $CreatedByName = ""
+        Write-Host ""
+        do {
+            $vmChoice = (Read-Host "  Nummer van te restoren Domain Controller (of typ naam handmatig)").Trim()
+            if ([string]::IsNullOrWhiteSpace($vmChoice)) {
+                Write-Host "  ⚠ Keuze mag niet leeg zijn." -ForegroundColor Red
+            } elseif ($vmChoice -match '^\d+$') {
+                if ([int]$vmChoice -lt 1 -or [int]$vmChoice -gt $allVMs.Count) {
+                    Write-Host "  ⚠ Kies een nummer tussen 1 en $($allVMs.Count)." -ForegroundColor Red
+                    $vmChoice = ""
+                } else {
+                    $DCName = $allVMs[[int]$vmChoice - 1].Name
+                }
+            } else {
+                if ($vmChoice -notmatch '^[a-zA-Z0-9\-]+$') {
+                    Write-Host "  ⚠ VM-naam mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
+                    $vmChoice = ""
+                } else {
+                    $DCName = $vmChoice
+                }
+            }
+        } while ([string]::IsNullOrWhiteSpace($vmChoice))
+    } else {
+        Write-Host "  ℹ Geen VM's gevonden of geen toegang. Typ de naam handmatig." -ForegroundColor Yellow
+        do {
+            $DCName = (Read-Host "  Naam van de te restoren Domain Controller").Trim()
+            if ([string]::IsNullOrWhiteSpace($DCName)) {
+                Write-Host "  ⚠ Naam mag niet leeg zijn." -ForegroundColor Red
+            } elseif ($DCName -notmatch '^[a-zA-Z0-9\-]+$') {
+                Write-Host "  ⚠ VM-naam mag alleen letters, cijfers en koppeltekens bevatten." -ForegroundColor Red
+                $DCName = ""
+            }
+        } while ([string]::IsNullOrWhiteSpace($DCName))
     }
-} while ([string]::IsNullOrWhiteSpace($CreatedByName))
-Write-OK "CreatedBy: $CreatedByName"
+    Write-OK "Domain Controller: $DCName"
+}
+
+# ── CreatedBy ─────────────────────────────────────────────────
+if (-not [string]::IsNullOrWhiteSpace($CreatedBy)) {
+    if ($CreatedBy -notmatch '^[a-zA-Z\s\-\.]+$' -or $CreatedBy.Length -lt 2) {
+        Write-Error "CreatedBy-naam '$CreatedBy' is ongeldig. Alleen letters, spaties, koppeltekens en punten (min. 2 tekens)."
+        exit 1
+    }
+    $CreatedByName = $CreatedBy
+    Write-OK "CreatedBy (parameter): $CreatedByName"
+} else {
+    do {
+        $CreatedByName = (Read-Host "  Jouw volledige naam (voor de CreatedBy-tag, bijv. Jan de Vries)").Trim()
+        if ([string]::IsNullOrWhiteSpace($CreatedByName)) {
+            Write-Host "  ⚠ Naam mag niet leeg zijn." -ForegroundColor Red
+        } elseif ($CreatedByName -notmatch '^[a-zA-Z\s\-\.]+$') {
+            Write-Host "  ⚠ Naam mag alleen letters, spaties, koppeltekens en punten bevatten." -ForegroundColor Red
+            $CreatedByName = ""
+        } elseif ($CreatedByName.Length -lt 2) {
+            Write-Host "  ⚠ Naam is te kort." -ForegroundColor Red
+            $CreatedByName = ""
+        }
+    } while ([string]::IsNullOrWhiteSpace($CreatedByName))
+    Write-OK "CreatedBy: $CreatedByName"
+}
 
 # ── Regio ─────────────────────────────────────────────────────
-# Geldige Azure-regio's (meest gebruikte westeurope-gerelateerd en NL)
 $validRegions = @(
     "westeurope", "northeurope", "eastus", "eastus2", "westus", "westus2",
     "centralus", "northcentralus", "southcentralus", "westcentralus",
@@ -200,37 +333,50 @@ $validRegions = @(
     "uaenorth", "uaecentral", "israelcentral", "polandcentral",
     "italynorth", "spaincentral"
 )
-
 $defaultRegion = "westeurope"
-Write-Host ""
-Write-Host "  Veelgebruikte regio's:" -ForegroundColor Cyan
-Write-Host "  westeurope, northeurope, uksouth, germanywestcentral, francecentral" -ForegroundColor White
-Write-Host ""
 
-do {
-    $RegionInput = (Read-Host "  Regio (Enter = $defaultRegion)").Trim().ToLower()
-    if ([string]::IsNullOrWhiteSpace($RegionInput)) {
-        $Region = $defaultRegion
-    } elseif ($RegionInput -notmatch '^[a-z0-9]+$') {
-        Write-Host "  ⚠ Regio mag alleen kleine letters en cijfers bevatten (bijv. westeurope)." -ForegroundColor Red
-        $RegionInput = $null
-    } elseif ($RegionInput -notin $validRegions) {
-        Write-Host "  ⚠ '$RegionInput' is geen bekende Azure-regio. Controleer de naam en probeer opnieuw." -ForegroundColor Red
-        Write-Host "    Tip: zie https://aka.ms/azureregions voor alle regio's." -ForegroundColor DarkGray
-        $RegionInput = $null
-    } else {
-        $Region = $RegionInput
+if (-not [string]::IsNullOrWhiteSpace($Region)) {
+    $Region = $Region.Trim().ToLower()
+    if ($Region -notmatch '^[a-z0-9]+$') {
+        Write-Error "Regio '$Region' is ongeldig. Alleen kleine letters en cijfers toegestaan."
+        exit 1
     }
-} while ($null -eq $RegionInput)
-Write-OK "Regio: $Region"
+    if ($Region -notin $validRegions) {
+        Write-Error "Regio '$Region' is geen bekende Azure-regio. Zie https://aka.ms/azureregions"
+        exit 1
+    }
+    Write-OK "Regio (parameter): $Region"
+} else {
+    Write-Host ""
+    Write-Host "  Veelgebruikte regio's:" -ForegroundColor Cyan
+    Write-Host "  westeurope, northeurope, uksouth, germanywestcentral, francecentral" -ForegroundColor White
+    Write-Host ""
+    do {
+        $RegionInput = (Read-Host "  Regio (Enter = $defaultRegion)").Trim().ToLower()
+        if ([string]::IsNullOrWhiteSpace($RegionInput)) {
+            $Region = $defaultRegion
+            $RegionInput = $defaultRegion
+        } elseif ($RegionInput -notmatch '^[a-z0-9]+$') {
+            Write-Host "  ⚠ Regio mag alleen kleine letters en cijfers bevatten." -ForegroundColor Red
+            $RegionInput = $null
+        } elseif ($RegionInput -notin $validRegions) {
+            Write-Host "  ⚠ '$RegionInput' is geen bekende Azure-regio." -ForegroundColor Red
+            Write-Host "    Tip: zie https://aka.ms/azureregions voor alle regio's." -ForegroundColor DarkGray
+            $RegionInput = $null
+        } else {
+            $Region = $RegionInput
+        }
+    } while ($null -eq $RegionInput)
+    Write-OK "Regio: $Region"
+}
 
 # ─────────────────────────────────────────────────────────────
 # VARIABELEN AFLEIDEN
 # ─────────────────────────────────────────────────────────────
 
-$ResourceGroupName  = "RG-Restore-Test-$TicketNumber"
+$ResourceGroupName  = "RG-Restore-Test-$Ticket"
 $NSGName            = "$CustomerName-Restore-Test-NSG"
-$StorageAccountName = ("rgrestoretest$TicketNumber" -replace '[^a-z0-9]', '').ToLower()
+$StorageAccountName = ("rgrestoretest$Ticket" -replace '[^a-z0-9]', '').ToLower()
 if ($StorageAccountName.Length -gt 24) { $StorageAccountName = $StorageAccountName.Substring(0, 24) }
 $VNetName           = "$CustomerName-Restore-Test-VNET"
 $SubnetName         = "default"
@@ -238,8 +384,8 @@ $PIPName            = "$CustomerName-Restore-Test-PIP"
 $VMRestoreName      = "$CustomerName-Restore-Test-$DCName"
 
 $Tags = @{
-    Omgeving         = "Restore"
-    CreatedBy        = "$CreatedByName"
+    Omgeving  = "Restore"
+    CreatedBy = "$CreatedByName"
 }
 
 Write-Host ""
@@ -263,7 +409,13 @@ Write-Host "  CreatedBy tag   : $($Tags.CreatedBy)" -ForegroundColor White
 Write-Host "  Overwrite VM    : false" -ForegroundColor White
 Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
 Write-Host ""
-Read-Host "  Alles correct? Druk Enter om te starten, of Ctrl+C om af te breken"
+
+# ── Bevestiging: overgeslagen als -SkipConfirmation opgegeven ─
+if ($SkipConfirmation) {
+    Write-OK "Bevestiging overgeslagen (-SkipConfirmation)."
+} else {
+    Read-Host "  Alles correct? Druk Enter om te starten, of Ctrl+C om af te breken"
+}
 
 # ─────────────────────────────────────────────────────────────
 # STAP 3 – RESOURCE GROUP
@@ -371,7 +523,6 @@ if ($null -eq $pip) {
 
 Write-Header "STAP 8 – Automatische VM-Restore"
 
-# ── 8.1 Zoek de Recovery Services Vault die de DC bevat ──────
 Write-Step "Recovery Services Vaults ophalen..."
 $allVaults = @(Get-AzRecoveryServicesVault)
 if ($allVaults.Count -eq 0) {
@@ -379,9 +530,8 @@ if ($allVaults.Count -eq 0) {
     exit 1
 }
 
-# Zoek automatisch de vault die een backup heeft van $DCName
-$targetVault    = $null
-$targetItem     = $null
+$targetVault = $null
+$targetItem  = $null
 
 foreach ($vault in $allVaults) {
     Set-AzRecoveryServicesVaultContext -Vault $vault
@@ -410,7 +560,6 @@ if ($null -eq $targetVault) {
 Write-OK "Vault gevonden: $($targetVault.Name)"
 Write-OK "Backup item  : $($targetItem.Name)"
 
-# ── 8.2 Herstelpunten ophalen en meest recente kiezen ───────
 Write-Step "Herstelpunten ophalen..."
 Set-AzRecoveryServicesVaultContext -Vault $targetVault
 
@@ -419,13 +568,12 @@ $recoveryPoints = @(Get-AzRecoveryServicesBackupRecoveryPoint `
     | Sort-Object -Property RecoveryPointTime -Descending)
 
 if ($recoveryPoints.Count -eq 0) {
-    Write-Error "Geen Herstelpunten gevonden voor '$DCName'."
+    Write-Error "Geen herstelpunten gevonden voor '$DCName'."
     exit 1
 }
 
-# Toon de 5 meest recente Herstelpunten ter keuze
 Write-Host ""
-Write-Host "  Beschikbare Herstelpunten (nieuwste eerst):" -ForegroundColor Cyan
+Write-Host "  Beschikbare herstelpunten (nieuwste eerst):" -ForegroundColor Cyan
 $showCount = [Math]::Min(5, $recoveryPoints.Count)
 for ($i = 0; $i -lt $showCount; $i++) {
     Write-Host ("  [{0}] {1}  ({2})" -f `
@@ -433,22 +581,28 @@ for ($i = 0; $i -lt $showCount; $i++) {
         $recoveryPoints[$i].RecoveryPointTime.ToString("yyyy-MM-dd HH:mm:ss"), `
         $recoveryPoints[$i].RecoveryPointType) -ForegroundColor White
 }
-
 Write-Host ""
-$rpChoice = Read-Host "  Kies Herstelpunt (Enter = 1, meest recent)"
-if ([string]::IsNullOrWhiteSpace($rpChoice)) { $rpChoice = 1 }
-$selectedRP = $recoveryPoints[[int]$rpChoice - 1]
-Write-OK "Herstelpunt gekozen: $($selectedRP.RecoveryPointTime.ToString("yyyy-MM-dd HH:mm:ss"))"
 
-# ── 8.3 Restore-configuratie opbouwen ────────────────────────
+# ── Herstelpunt kiezen: via flag of interactief ───────────────
+if ($RecoveryPointIndex -gt 0) {
+    if ($RecoveryPointIndex -gt $recoveryPoints.Count) {
+        Write-Error "RecoveryPointIndex $RecoveryPointIndex is groter dan het aantal beschikbare herstelpunten ($($recoveryPoints.Count))."
+        exit 1
+    }
+    $selectedRP = $recoveryPoints[$RecoveryPointIndex - 1]
+    Write-OK "Herstelpunt (parameter [$RecoveryPointIndex]): $($selectedRP.RecoveryPointTime.ToString("yyyy-MM-dd HH:mm:ss"))"
+} else {
+    $rpChoice = Read-Host "  Kies herstelpunt (Enter = 1, meest recent)"
+    if ([string]::IsNullOrWhiteSpace($rpChoice)) { $rpChoice = 1 }
+    $selectedRP = $recoveryPoints[[int]$rpChoice - 1]
+    Write-OK "Herstelpunt gekozen: $($selectedRP.RecoveryPointTime.ToString("yyyy-MM-dd HH:mm:ss"))"
+}
+
 Write-Step "Restore-configuratie opbouwen..."
-
 $vnet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroupName
 $sa   = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
-
 Write-OK "Restore-configuratie opgebouwd."
 
-# ── 8.4 Restore starten ───────────────────────────────────────
 Write-Step "Restore-job starten voor '$VMRestoreName'..."
 $restoreJob = Restore-AzRecoveryServicesBackupItem `
     -RecoveryPoint                   $selectedRP `
@@ -464,18 +618,17 @@ $restoreJob = Restore-AzRecoveryServicesBackupItem `
 
 Write-OK "Restore-job gestart. Job ID: $($restoreJob.JobId)"
 
-# ── 8.5 Wachten tot restore klaar is (met voortgang) ─────────
 Write-Step "Wachten op voltooiing van restore-job..."
 Write-Host ""
 
-$jobDone      = $false
-$waitSeconds  = 30
-$elapsedSecs  = 0
-$spinChars    = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
-$spinIndex    = 0
-$barWidth     = 20
-$barFilled    = 0
-$lastStatus   = "InProgress"
+$jobDone     = $false
+$waitSeconds = 30
+$elapsedSecs = 0
+$spinChars   = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+$spinIndex   = 0
+$barWidth    = 20
+$barFilled   = 0
+$lastStatus  = "InProgress"
 
 function Show-ProgressBar {
     param(
@@ -488,15 +641,12 @@ function Show-ProgressBar {
     $done      = [Math]::Min($Filled, $Total)
     $remaining = $Total - $done
     $bar       = "█" * $done + "░" * $remaining
-    $pct       = [Math]::Min([int](($done / $Total) * 100), 99)  # nooit 100% tonen tot écht klaar
-
-    # Schrijf op dezelfde regel (geen newline)
+    $pct       = [Math]::Min([int](($done / $Total) * 100), 99)
     Write-Host ("`r  {0} [{1}] {2}%  ⏱ {3}  Status: {4,-20}" -f `
         $Spinner, $bar, $pct, $Elapsed, $Status) -NoNewline -ForegroundColor Cyan
 }
 
 while (-not $jobDone) {
-    # Countdown van waitSeconds naar 0, per seconde spinner updaten
     for ($tick = $waitSeconds; $tick -gt 0; $tick--) {
         $spinChar       = $spinChars[$spinIndex % $spinChars.Count]
         $spinIndex++
@@ -505,13 +655,11 @@ while (-not $jobDone) {
         Start-Sleep -Seconds 1
     }
 
-    $elapsedSecs += $waitSeconds
-
+    $elapsedSecs   += $waitSeconds
     $jobStatus      = Get-AzRecoveryServicesBackupJob -JobId $restoreJob.JobId -VaultId $targetVault.ID
     $lastStatus     = $jobStatus.Status
     $elapsedDisplay = [string]::Format("{0:mm\:ss}", [timespan]::FromSeconds($elapsedSecs))
 
-    # Balk langzaam laten vullen (elke poll 1 blokje, max tot 19 — laatste blokje pas bij Completed)
     if ($barFilled -lt ($barWidth - 1)) { $barFilled++ }
 
     if ($lastStatus -in @("Completed", "Failed", "Cancelled")) {
@@ -519,7 +667,6 @@ while (-not $jobDone) {
     }
 }
 
-# Eindstatus op nieuwe regel tonen
 if ($jobStatus.Status -eq "Completed") {
     $barFilled = $barWidth
     Show-ProgressBar -Filled $barFilled -Total $barWidth -Spinner "✔" -Elapsed $elapsedDisplay -Status "Completed"
@@ -532,8 +679,6 @@ if ($jobStatus.Status -eq "Completed") {
     Write-Error "Restore-job geëindigd met status: $($jobStatus.Status). Controleer de vault in de Azure Portal."
     exit 1
 }
-
-Write-OK "Restore succesvol afgerond. VM '$VMRestoreName' is aangemaakt."
 
 # ─────────────────────────────────────────────────────────────
 # STAP 9 – VM EN NIC OPHALEN
@@ -556,7 +701,7 @@ while ($null -eq $restoredVM -and $retryCount -lt $maxRetries) {
 }
 
 if ($null -eq $restoredVM) {
-    Write-Error "VM '$VMRestoreName' niet gevonden na $maxRetries pogingen. Controleer de naam in de Portal en herstart het script vanaf stap 9."
+    Write-Error "VM '$VMRestoreName' niet gevonden na $maxRetries pogingen."
     exit 1
 }
 Write-OK "VM gevonden: $($restoredVM.Name)"
@@ -594,7 +739,7 @@ Set-AzNetworkInterface -NetworkInterface $nic | Out-Null
 Write-OK "NSG gekoppeld aan NIC."
 
 # ─────────────────────────────────────────────────────────────
-# STAP 12 – RDP INBOUND RULE TOEVOEGEN AAN NSG
+# STAP 12 – RDP INBOUND RULE
 # ─────────────────────────────────────────────────────────────
 
 Write-Header "STAP 12 – RDP Inbound Rule toevoegen"
@@ -626,7 +771,7 @@ if ($null -eq $existingRule) {
 }
 
 # ─────────────────────────────────────────────────────────────
-# STAP 13 – PUBLIC IP OPHALEN EN EINDRAPPORT
+# STAP 13 – RESULTAAT & INSTRUCTIES
 # ─────────────────────────────────────────────────────────────
 
 Write-Header "STAP 13 – Resultaat & Instructies"
@@ -653,32 +798,32 @@ Write-Host "  └─────────────────────
 Write-Host ""
 Write-Host "  VOLGENDE STAP – HANDMATIGE VALIDATIE:" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "  1. Verbind met de server via RDP (opstarten van de VM kan even duren)" -ForegroundColor Yellow
+Write-Host "  1. Verbind met de server via RDP (opstarten kan even duren)" -ForegroundColor Yellow
 Write-Host "     IP adres: $publicIPAddress" -ForegroundColor White
 Write-Host ""
 Write-Host "  2. Log in met de domeinbeheerder-credentials" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  3. Controleer de Domain Controller:"                                                                 -ForegroundColor Yellow
-Write-Host "     - Open Active Directory Users and Computers"                                                      -ForegroundColor White
-Write-Host "     - Voer uit: hostname (in cmd)"                                                                    -ForegroundColor White
-Write-Host "     - Open Services en sorteer op 'Startup Type' 'Automatic', controleer of deze 'Running' zijn!"     -ForegroundColor White
-Write-Host "     - Controleer of de FSMO-rollen correct zijn"                                                      -ForegroundColor White
-Write-Host "     - Verifieer DNS-functionaliteit"                                                                  -ForegroundColor White
+Write-Host "  3. Controleer de Domain Controller:"                                                              -ForegroundColor Yellow
+Write-Host "     - Open Active Directory Users and Computers"                                                   -ForegroundColor White
+Write-Host "     - Voer uit: hostname (in cmd)"                                                                 -ForegroundColor White
+Write-Host "     - Open Services en sorteer op 'Startup Type' 'Automatic', controleer of ze 'Running' zijn!"   -ForegroundColor White
+Write-Host "     - Controleer of de FSMO-rollen correct zijn"                                                   -ForegroundColor White
+Write-Host "     - Verifieer DNS-functionaliteit"                                                               -ForegroundColor White
 Write-Host ""
-Write-Host "  4. Verwijder de restore-omgeving na validatie via:"                                                  -ForegroundColor Yellow
-Write-Host "     Remove-AzResourceGroup -Name $ResourceGroupName -Force"                                           -ForegroundColor White
+Write-Host "  4. Verwijder de restore-omgeving na validatie via:"                                               -ForegroundColor Yellow
+Write-Host "     Remove-AzResourceGroup -Name $ResourceGroupName -Force"                                        -ForegroundColor White
 Write-Host ""
-Write-Host "  Succes met de validatie :)"                                                                          -ForegroundColor Green
+Write-Host "  Succes met de validatie :)"                                                                       -ForegroundColor Green
 Write-Host ""
 
 # ─────────────────────────────────────────────────────────────
-# STAP 14 – OPRUIMEN
+# STAP 14 – OPRUIMEN (altijd interactief — bewuste keuze)
 # ─────────────────────────────────────────────────────────────
 
 Write-Header "STAP 14 – Opruimen (optioneel)"
 
 Write-Host "  Wil je de volledige restore-omgeving verwijderen?" -ForegroundColor Yellow
-Write-Host "  Dit verwijdert de volgende resource group inclusief alle resources:" -ForegroundColor White
+Write-Host "  Dit verwijdert de resource group inclusief alle resources:" -ForegroundColor White
 Write-Host "  → $ResourceGroupName" -ForegroundColor White
 Write-Host ""
 Write-Host "  ⚠ Dit kan NIET ongedaan worden gemaakt!" -ForegroundColor Red
@@ -686,9 +831,7 @@ Write-Host ""
 
 do {
     $cleanupInput = (Read-Host "  Opruimen? (ja/nee, Enter = nee)").Trim().ToLower()
-    if ([string]::IsNullOrWhiteSpace($cleanupInput)) {
-        $cleanupInput = "nee"
-    }
+    if ([string]::IsNullOrWhiteSpace($cleanupInput)) { $cleanupInput = "nee" }
     if ($cleanupInput -notin @("ja", "nee")) {
         Write-Host "  ⚠ Typ 'ja' of 'nee'." -ForegroundColor Red
         $cleanupInput = $null
@@ -700,9 +843,7 @@ if ($cleanupInput -eq "ja") {
     Write-Host "  Laatste bevestiging — dit verwijdert alles inclusief de herstelde VM." -ForegroundColor Red
     do {
         $confirmCleanup = (Read-Host "  Typ 'VERWIJDER' om te bevestigen, of druk Enter om te annuleren").Trim()
-        if ([string]::IsNullOrWhiteSpace($confirmCleanup)) {
-            $confirmCleanup = "annuleren"
-        }
+        if ([string]::IsNullOrWhiteSpace($confirmCleanup)) { $confirmCleanup = "annuleren" }
         if ($confirmCleanup -notin @("VERWIJDER", "annuleren")) {
             Write-Host "  ⚠ Typ exact 'VERWIJDER' of druk Enter om te annuleren." -ForegroundColor Red
             $confirmCleanup = $null
@@ -714,7 +855,7 @@ if ($cleanupInput -eq "ja") {
         Remove-AzResourceGroup -Name $ResourceGroupName -Force | Out-Null
         Write-OK "Resource group '$ResourceGroupName' succesvol verwijderd."
         Disconnect-AzAccount | Out-Null
-        Write-OK "Succesvol uitgelogd van Azure"
+        Write-OK "Succesvol uitgelogd van Azure."
     } else {
         Write-Host "  ℹ Verwijderen geannuleerd. Resource group blijft bestaan." -ForegroundColor Yellow
     }
