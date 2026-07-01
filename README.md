@@ -1,5 +1,8 @@
 # Azure-Restore-Test-PowerShell
 
+> [!NOTE]
+> Code is geschreven met behulp van Claude Sonet, alle code is gecontroleerd door mijzelf en wordt uitvoerig getest in een testomgeving!
+
 Automatiseert het herstel van een Azure Virtual Machine (VM) naar een gescheiden herstelomgeving via PowerShell.
 
 ---
