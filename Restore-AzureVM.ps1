@@ -75,7 +75,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptVersion = "0.0.2"
-$ScriptUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/main/Restore-AzureVM.ps1"
+$BaseUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/main/"
+$LatestVersionUrl = "$BaseUrl/version.txt"
+$ScriptUrl = "$BaseUrl/Restore-AzureVM.ps1"
 
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
@@ -115,25 +117,31 @@ function Write-Error {
 # STAP 0 - VERSIE CHECK
 # ─────────────────────────────────────────────────────────────
 
+Write-Header "STAP 0 - Versie Controle"
 function Update-Script {
     Invoke-WebRequest -Uri $ScriptUrl -OutFile $PSCommandPath -UseBasicParsing
-    Write-Info "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
+    Write-Host "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
     exit
 }
 
 try {
-    $LatestVersion = Invoke-RestMethod -Uri $ScriptUrl -UseBasicParsing
+    $LatestVersion = (Invoke-RestMethod -Uri $LatestVersionUrl -UseBasicParsing).Trim()
 } catch {
     Write-Error "Kan laatste versie niet ophalen."
-    $LatestVersion = $ScriptVersion
+    $LatestVersion = $null
 }
 
-if ($LatestVersion -ne $ScriptVersion) {
-    $Update = Read-Host "Nieuwe versie beschikbaar (Huidige is $($ScriptVersion)! Nu updaten? (J/n)"
-    if ($Update -notin @("N","n")) {
+if ($null -eq $LatestVersion) {
+    # Geen actie, fout is al getoond
+} elseif ($LatestVersion -ne $ScriptVersion) {
+    Write-Host "Huidige versie : $ScriptVersion"
+    Write-Host "Nieuwste versie: $LatestVersion"
+    $Update = Read-Host "`nNieuwe versie beschikbaar! Nu updaten? (J/n)"
+    if ($Update -notin @("N", "n")) {
         Update-Script
     }
-    
+} else {
+    Write-Host "Geen update gevonden"
 }
 
 # ─────────────────────────────────────────────────────────────
