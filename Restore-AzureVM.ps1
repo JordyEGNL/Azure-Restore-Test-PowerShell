@@ -77,7 +77,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptVersion = "0.0.1"
-$LatestVersionUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/small-fixes/Restore-AzureVM.ps1"
+$ScriptUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/small-fixes/Restore-AzureVM.ps1"
 
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
@@ -118,14 +118,13 @@ function Write-Error {
 # ─────────────────────────────────────────────────────────────
 
 function Update-Script {
-    $ScriptPath = $MyInvocation.MyCommand.Definition
-    Invoke-WebRequest -Uri $LatestVersionUrl -OutFile $ScriptPath -UseBasicParsing
+    Invoke-WebRequest -Uri $ScriptUrl -OutFile $PSCommandPath -UseBasicParsing
     Write-Info "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
     exit
 }
 
 try {
-    $LatestVersion = Invoke-RestMethod -Uri $LatestVersionUrl -UseBasicParsing
+    $LatestVersion = Invoke-RestMethod -Uri $ScriptUrl -UseBasicParsing
 } catch {
     Write-Error "Kan laatste versie niet ophalen."
     $LatestVersion = $ScriptVersion
