@@ -104,6 +104,11 @@ function Write-Info {
     Write-Host "  ℹ $Text" -ForegroundColor White
 }
 
+function Write-Error {
+    param([string]$Text)
+    Write-Host "  ⚠ $Text" -ForegroundColor Red
+}    
+
 # ─────────────────────────────────────────────────────────────
 # STAP 1 – LOGIN EN SUBSCRIPTION SELECTIE
 # ─────────────────────────────────────────────────────────────
@@ -138,9 +143,11 @@ if ($UseExistingSession) {
 }
 
 # Haal alle subscriptions op
-$allSubs = Get-AzSubscription | Sort-Object Name
+$allSubs = @(Get-AzSubscription | Sort-Object Name)
 if ($allSubs.Count -eq 0) {
-    Write-Error "Geen subscriptions gevonden voor dit account."
+    Write-Error "Geen subscriptions gevonden voor dit account. (Heb je de juiste rollen actief?)
+    https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac
+    "
     exit 1
 }
 
