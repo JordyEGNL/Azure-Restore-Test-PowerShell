@@ -53,8 +53,6 @@
 
 .NOTES
     Auteur  : Jordy Hoebergen
-    Versie  : 0.2
-    Laatst aangepast: 2026-07-01
 #>
 
 [CmdletBinding()]
@@ -75,6 +73,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$ScriptVersion = "0.0.1"
+$BaseUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/main/"
+$LatestVersionUrl = "$BaseUrl/version.txt"
+$ScriptUrl = "$BaseUrl/Restore-AzureVM.ps1"
 
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
@@ -102,6 +105,43 @@ function Write-OK {
 function Write-Info {
     param([string]$Text)
     Write-Host "  ℹ $Text" -ForegroundColor White
+}
+
+function Write-Error {
+    param([string]$Text)
+    Write-Host "  ⚠ $Text" -ForegroundColor Red
+}    
+
+
+# ─────────────────────────────────────────────────────────────
+# STAP 0 - VERSIE CHECK
+# ─────────────────────────────────────────────────────────────
+
+Write-Header "STAP 0 - Versie Controle"
+function Update-Script {
+    Invoke-WebRequest -Uri $ScriptUrl -OutFile $PSCommandPath -UseBasicParsing
+    Write-Info "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
+    exit
+}
+
+try {
+    $LatestVersion = (Invoke-RestMethod -Uri $LatestVersionUrl -UseBasicParsing).Trim()
+} catch {
+    Write-Error "Kan laatste versie niet ophalen."
+    $LatestVersion = $null
+}
+
+if ($null -eq $LatestVersion) {
+    # Geen actie, fout is al getoond
+} elseif ($LatestVersion -ne $ScriptVersion) {
+    Write-Info "Huidige versie : $ScriptVersion"
+    Write-Info "Nieuwste versie: $LatestVersion"
+    $Update = Read-Host "`nNieuwe versie beschikbaar! Nu updaten? (J/n)"
+    if ($Update -notin @("N", "n")) {
+        Update-Script
+    }
+} else {
+    Write-Info "Geen update gevonden"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -138,9 +178,10 @@ if ($UseExistingSession) {
 }
 
 # Haal alle subscriptions op
-$allSubs = Get-AzSubscription | Sort-Object Name
+$allSubs = @(Get-AzSubscription | Sort-Object Name)
 if ($allSubs.Count -eq 0) {
-    Write-Error "Geen subscriptions gevonden voor dit account."
+    Write-Error "Geen subscriptions gevonden voor dit account. (Heb je de juiste rollen actief?)
+    https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac"
     exit 1
 }
 
