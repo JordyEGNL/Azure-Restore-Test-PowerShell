@@ -785,6 +785,15 @@ Write-OK "NSG gekoppeld aan NIC."
 
 Write-Header "STAP 12 – RDP Inbound Rule toevoegen"
 
+Write-Step "Publiek IP-adres ophalen via ifconfig.me..."
+try {
+    $PublicIP = (Invoke-RestMethod -Uri "https://ifconfig.me/ip" -UseBasicParsing).Trim()
+    Write-OK "Publiek IP opgehaald: $PublicIP"
+} catch {
+    Write-Error "Kan publiek IP-adres niet ophalen."
+    return
+}
+
 Write-Step "Inbound RDP-regel 'AllowRDP' toevoegen..."
 $nsg = Get-AzNetworkSecurityGroup -Name $NSGName -ResourceGroupName $ResourceGroupName
 
@@ -795,7 +804,7 @@ if ($null -eq $existingRule) {
         -Protocol                 Tcp `
         -Direction                Inbound `
         -Priority                 100 `
-        -SourceAddressPrefix      "0.0.0.0/0" `
+        -SourceAddressPrefix      "$PublicIP/32" `
         -SourcePortRange          "*" `
         -DestinationAddressPrefix $privateIP `
         -DestinationPortRange     3389 `
@@ -804,7 +813,7 @@ if ($null -eq $existingRule) {
     $nsg.SecurityRules.Add($rdpRule)
     Set-AzNetworkSecurityGroup -NetworkSecurityGroup $nsg | Out-Null
     Write-OK "RDP-regel 'AllowRDP' toegevoegd."
-    Write-Info "  Source     : 0.0.0.0/0"
+    Write-Info "  Source     : $PublicIP/32"
     Write-Info "  Destination: $privateIP"
     Write-Info "  Poort      : 3389"
 } else {
@@ -823,7 +832,7 @@ $publicIPAddress = $pipFinal.IpAddress
 
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "  ║            RESTORE OMGEVING GEREED                  ║" -ForegroundColor Green
+Write-Host "  ║                RESTORE OMGEVING GEREED               ║" -ForegroundColor Green
 Write-Host "  ╚══════════════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
 Write-Host "  OVERZICHT AANGEMAAKTE RESOURCES:" -ForegroundColor Cyan
@@ -842,7 +851,7 @@ Write-Host ""
 Write-Host "  1. Verbind met de server via RDP (opstarten kan even duren)" -ForegroundColor Yellow
 Write-Host "     IP adres: $publicIPAddress" -ForegroundColor White
 Write-Host ""
-Write-Host "  2. Log in met de domeinbeheerder-credentials" -ForegroundColor Yellow
+Write-Host "  2. Log in met je domain admin credentials" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  3. Controleer de Domain Controller:"                                                              -ForegroundColor Yellow
 Write-Host "     - Open Active Directory Users and Computers"                                                   -ForegroundColor White
