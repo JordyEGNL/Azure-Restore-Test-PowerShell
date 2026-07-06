@@ -53,8 +53,6 @@
 
 .NOTES
     Auteur  : Jordy Hoebergen
-    Versie  : 0.2
-    Laatst aangepast: 2026-07-01
 #>
 
 [CmdletBinding()]
@@ -76,7 +74,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.0.1"
+$ScriptVersion = "0.0.2"
 $ScriptUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/small-fixes/Restore-AzureVM.ps1"
 
 # ─────────────────────────────────────────────────────────────
