@@ -75,7 +75,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptVersion = "0.0.2"
-$ScriptUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/small-fixes/Restore-AzureVM.ps1"
+$ScriptUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/main/Restore-AzureVM.ps1"
 
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
