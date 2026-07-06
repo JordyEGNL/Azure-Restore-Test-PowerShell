@@ -74,7 +74,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.0.2"
+$ScriptVersion = "0.0.1"
 $BaseUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/main/"
 $LatestVersionUrl = "$BaseUrl/version.txt"
 $ScriptUrl = "$BaseUrl/Restore-AzureVM.ps1"
@@ -120,7 +120,7 @@ function Write-Error {
 Write-Header "STAP 0 - Versie Controle"
 function Update-Script {
     Invoke-WebRequest -Uri $ScriptUrl -OutFile $PSCommandPath -UseBasicParsing
-    Write-Host "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
+    Write-Info "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
     exit
 }
 
@@ -134,14 +134,14 @@ try {
 if ($null -eq $LatestVersion) {
     # Geen actie, fout is al getoond
 } elseif ($LatestVersion -ne $ScriptVersion) {
-    Write-Host "Huidige versie : $ScriptVersion"
-    Write-Host "Nieuwste versie: $LatestVersion"
+    Write-Info "Huidige versie : $ScriptVersion"
+    Write-Info "Nieuwste versie: $LatestVersion"
     $Update = Read-Host "`nNieuwe versie beschikbaar! Nu updaten? (J/n)"
     if ($Update -notin @("N", "n")) {
         Update-Script
     }
 } else {
-    Write-Host "Geen update gevonden"
+    Write-Info "Geen update gevonden"
 }
 
 # ─────────────────────────────────────────────────────────────
