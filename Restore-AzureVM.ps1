@@ -76,6 +76,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$ScriptVersion = "0.0.1"
+$LatestVersionUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/heads/small-fixes/Restore-AzureVM.ps1"
+
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
 # ─────────────────────────────────────────────────────────────
@@ -108,6 +111,33 @@ function Write-Error {
     param([string]$Text)
     Write-Host "  ⚠ $Text" -ForegroundColor Red
 }    
+
+
+# ─────────────────────────────────────────────────────────────
+# STAP 0 - VERSIE CHECK
+# ─────────────────────────────────────────────────────────────
+
+function Update-Script {
+    $ScriptPath = $MyInvocation.MyCommand.Definition
+    Invoke-WebRequest -Uri $LatestVersionUrl -OutFile $ScriptPath -UseBasicParsing
+    Write-Info "Script is bijgewerkt naar de nieuwste versie. Start opnieuw."
+    exit
+}
+
+try {
+    $LatestVersion = Invoke-RestMethod -Uri $LatestVersionUrl -UseBasicParsing
+} catch {
+    Write-Error "Kan laatste versie niet ophalen."
+    $LatestVersion = $ScriptVersion
+}
+
+if ($LatestVersion -ne $ScriptVersion) {
+    $Update = Read-Host "Nieuwe versie beschikbaar (Huidige is $($ScriptVersion)! Nu updaten? (J/n)"
+    if ($Update -notin @("N","n")) {
+        Update-Script
+    }
+    
+}
 
 # ─────────────────────────────────────────────────────────────
 # STAP 1 – LOGIN EN SUBSCRIPTION SELECTIE
