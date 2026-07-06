@@ -146,8 +146,7 @@ if ($UseExistingSession) {
 $allSubs = @(Get-AzSubscription | Sort-Object Name)
 if ($allSubs.Count -eq 0) {
     Write-Error "Geen subscriptions gevonden voor dit account. (Heb je de juiste rollen actief?)
-    https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac
-    "
+    https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac"
     exit 1
 }
 
