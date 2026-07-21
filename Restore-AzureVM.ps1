@@ -185,42 +185,29 @@ if ($allSubs.Count -eq 0) {
     exit 1
 }
 
-# ── Subscription kiezen: via flag of interactief ─────────────
+# ── Subscription bepalen ──────────────────────────────────────
 if (-not [string]::IsNullOrWhiteSpace($Subscription)) {
-    # Zoek op naam of ID
+    # Via parameter: zoek op naam of ID
     $selectedSub = $allSubs | Where-Object {
         $_.Name -eq $Subscription -or $_.Id -eq $Subscription
     } | Select-Object -First 1
 
     if ($null -eq $selectedSub) {
-        Write-Error "Subscription '$Subscription' niet gevonden. Beschikbare subscriptions:`n$(($allSubs | ForEach-Object { '  ' + $_.Name }) -join "`n")"
+        Write-Error "Subscription '$Subscription' niet gevonden."
         exit 1
     }
-    Write-OK "Subscription via parameter: $($selectedSub.Name)"
-} else {
-    # Interactief kiezen
-    $defaultSubIndex = 1
-    for ($i = 0; $i -lt $allSubs.Count; $i++) {
-        if ($allSubs[$i].Name -like "*Recovery*") {
-            $defaultSubIndex = $i + 1
-            break
-        }
-    }
+    Write-OK "Subscription (parameter): $($selectedSub.Name) [$($selectedSub.Id)]"
 
-    Write-Host ""
-    Write-Host "  Beschikbare subscriptions:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $allSubs.Count; $i++) {
-        $marker = if (($i + 1) -eq $defaultSubIndex) { "  ← standaard" } else { "" }
-        Write-Host ("  [{0,2}] {1}{2}" -f ($i + 1), $allSubs[$i].Name, $marker) -ForegroundColor White
-    }
-    Write-Host ""
-    $subChoice = Read-Host "  Kies subscriptienummer (Enter = $defaultSubIndex)"
-    if ([string]::IsNullOrWhiteSpace($subChoice)) { $subChoice = $defaultSubIndex }
-    $selectedSub = $allSubs[[int]$subChoice - 1]
+} else {
+    # Hergebruik de subscription die Connect-AzAccount al heeft geselecteerd
+    $currentContext = Get-AzContext
+    $selectedSub = $allSubs | Where-Object { $_.Id -eq $currentContext.Subscription.Id } | Select-Object -First 1
+    Write-OK "Subscription overgenomen van inlogsessie: $($selectedSub.Name) [$($selectedSub.Id)]"
 }
 
 Set-AzContext -SubscriptionId $selectedSub.Id | Out-Null
-Write-OK "Ingelogd en subscription ingesteld: $($selectedSub.Name)"
+
+
 
 # ─────────────────────────────────────────────────────────────
 # STAP 2 – GEBRUIKERSINVOER
