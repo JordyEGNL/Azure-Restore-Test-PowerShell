@@ -43,3 +43,4 @@ jobs:
           tag_name: "v${{ github.event.inputs.version }}"
           files: Restore-AzureVM.ps1
           generate_release_notes: true
+          draft: true
