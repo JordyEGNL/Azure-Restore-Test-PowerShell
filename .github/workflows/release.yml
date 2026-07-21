@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versienummer (bijv. 0.0.1)'
+        required: true
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: version.txt bijwerken
+        run: |
+          echo "${{ github.event.inputs.version }}" > version.txt
+
+      - name: $ScriptVersion bijwerken in Restore-AzureVM.ps1
+        run: |
+          sed -i 's/^\$ScriptVersion = ".*"/$ScriptVersion = "${{ github.event.inputs.version }}"/' Restore-AzureVM.ps1
+
+      - name: Commit, push en tag aanmaken
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.txt Restore-AzureVM.ps1
+          git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin main "v${{ github.event.inputs.version }}"
+
+      - name: GitHub Release aanmaken
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ github.event.inputs.version }}"
+          files: Restore-AzureVM.ps1
+          generate_release_notes: true
+          draft: true
