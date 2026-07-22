@@ -79,6 +79,9 @@ $BaseUrl = "https://github.com/JordyEGNL/Azure-Restore-Test-PowerShell/raw/refs/
 $LatestVersionUrl = "$BaseUrl/version.txt"
 $ScriptUrl = "$BaseUrl/Restore-AzureVM.ps1"
 
+# Bovenaan het script, samen met de andere variabelen
+$allSubsCache = $null
+
 # ─────────────────────────────────────────────────────────────
 # HELPFUNCTIES
 # ─────────────────────────────────────────────────────────────
@@ -391,10 +394,44 @@ if (-not $pimActivated) {
     }
 }
 
+# In de propagatie-loop
 if ($pimActivated -eq "activated") {
-    Write-Step "Wachten op rol-propagatie (15 seconden)..."
-    Start-Sleep -Seconds 15
-    Write-OK "Propagatie voltooid."
+    Write-Step "Wachten op rol-propagatie..."
+
+    $maxWaitSeconds  = 120
+    $intervalSeconds = 15
+    $waited          = 0
+    $subFound        = $false
+
+    while ($waited -lt $maxWaitSeconds -and -not $subFound) {
+        Start-Sleep -Seconds $intervalSeconds
+        $waited += $intervalSeconds
+        Write-Info "Wachten... ($waited/$maxWaitSeconds seconden)"
+
+        # Silent token refresh — geen inlogscherm
+        try {
+            Get-AzAccessToken -ResourceUrl "https://management.azure.com/" `
+                              -TenantId $TenantId `
+                              -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Info "Token vernieuwen mislukt, volgende poging... ($_)"
+            continue
+        }
+
+        $testSubs = @(Get-AzSubscription -TenantId $TenantId -ErrorAction SilentlyContinue)
+        if ($testSubs.Count -gt 0) {
+            $subFound     = $true
+            $allSubsCache = $testSubs  # <-- opslaan voor STAP 3
+            Write-OK "Propagatie voltooid na $waited seconden — $($testSubs.Count) subscription(s) gevonden."
+        } else {
+            Write-Info "Nog geen subscriptions zichtbaar, nog even wachten..."
+        }
+    }
+
+    if (-not $subFound) {
+        Write-Host "  ⚠ Na $maxWaitSeconds seconden nog geen subscriptions zichtbaar." -ForegroundColor Yellow
+        Read-Host "  Druk Enter om toch door te gaan, of Ctrl+C om af te breken"
+    }
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -403,7 +440,14 @@ if ($pimActivated -eq "activated") {
 
 Write-Header "STAP 3 – Subscription Selectie"
 
-$allSubs = @(Get-AzSubscription | Sort-Object Name)
+# Hergebruik subscriptions uit propagatie-cache, anders opnieuw ophalen
+if ($null -ne $allSubsCache -and $allSubsCache.Count -gt 0) {
+    $allSubs = @($allSubsCache | Sort-Object Name)
+    Write-Info "Subscriptions overgenomen uit propagatie-cache."
+} else {
+    $allSubs = @(Get-AzSubscription -TenantId $resolvedTenantId | Sort-Object Name)
+}
+
 if ($allSubs.Count -eq 0) {
     Write-Error "Geen subscriptions gevonden voor dit account. (Heb je de juiste rollen actief?)
     https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/azurerbac"
@@ -422,14 +466,30 @@ if (-not [string]::IsNullOrWhiteSpace($Subscription)) {
     }
     Write-OK "Subscription (parameter): $($selectedSub.Name) [$($selectedSub.Id)]"
 
+} elseif ($allSubs.Count -eq 1) {
+    # Slechts één subscription beschikbaar — automatisch selecteren
+    $selectedSub = $allSubs[0]
+    Write-OK "Subscription automatisch geselecteerd: $($selectedSub.Name) [$($selectedSub.Id)]"
+
 } else {
-    # Hergebruik de subscription die Connect-AzAccount al heeft geselecteerd
-    $currentContext = Get-AzContext
-    $selectedSub = $allSubs | Where-Object { $_.Id -eq $currentContext.Subscription.Id } | Select-Object -First 1
-    Write-OK "Subscription overgenomen van inlogsessie: $($selectedSub.Name) [$($selectedSub.Id)]"
+    # Meerdere subscriptions — laat gebruiker kiezen
+    Write-Host ""
+    Write-Host "  Beschikbare subscriptions:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $allSubs.Count; $i++) {
+        Write-Host ("  [{0,2}] {1}" -f ($i + 1), $allSubs[$i].Name) -ForegroundColor White
+    }
+    Write-Host ""
+    do {
+        $subChoice = (Read-Host "  Kies een subscription (nummer)").Trim()
+    } while (-not ($subChoice -match '^\d+$') -or
+             [int]$subChoice -lt 1 -or
+             [int]$subChoice -gt $allSubs.Count)
+
+    $selectedSub = $allSubs[[int]$subChoice - 1]
+    Write-OK "Subscription gekozen: $($selectedSub.Name) [$($selectedSub.Id)]"
 }
 
-Set-AzContext -SubscriptionId $selectedSub.Id | Out-Null
+Set-AzContext -SubscriptionId $selectedSub.Id -TenantId $resolvedTenantId | Out-Null
 
 # ─────────────────────────────────────────────────────────────
 # STAP 4 – INVOER GEGEVENS
