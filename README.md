@@ -80,7 +80,7 @@ Voer het script uit in PowerShell:
 | `CustomerName`       | Naam van de klant                                    | Nee         |
 | `Ticket`             | Ticketnummer of referentie                           | Nee         |
 | `CreatedBy`          | Naam van de uitvoerder                               | Nee         |
-| `Region`             | Azure regio (bv. westeurope, northeurope)            | Ne          |
+| `Region`             | Azure regio (bv. westeurope, northeurope)            | Nee         |
 | `TenantID`           | Service Principal Tenant ID                          | Nee         |
 | `AppId`              | Service Principal applicatie ID                      | Nee         |
 | `AppSecret`          | Service Principal secret                             | Nee         |
