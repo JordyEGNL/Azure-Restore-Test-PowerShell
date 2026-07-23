@@ -24,7 +24,7 @@ Dit script begeleidt het herstellen van een Azure VM-backup vanuit een Recovery 
   - Az.Compute
   - Az.RecoveryServices
 - Geldige Azure inloggegevens of Service Principal credentials
-- Minimaal Contributor role actief
+- Minimaal Contributor role eligible
 
 ---
 
@@ -80,7 +80,7 @@ Voer het script uit in PowerShell:
 | `CustomerName`       | Naam van de klant                                    | Nee         |
 | `Ticket`             | Ticketnummer of referentie                           | Nee         |
 | `CreatedBy`          | Naam van de uitvoerder                               | Nee         |
-| `Region`             | Azure regio (bv. westeurope, northeurope)            | Ne          |
+| `Region`             | Azure regio (bv. westeurope, northeurope)            | Nee         |
 | `TenantID`           | Service Principal Tenant ID                          | Nee         |
 | `AppId`              | Service Principal applicatie ID                      | Nee         |
 | `AppSecret`          | Service Principal secret                             | Nee         |
