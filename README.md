@@ -24,7 +24,7 @@ Dit script begeleidt het herstellen van een Azure VM-backup vanuit een Recovery 
   - Az.Compute
   - Az.RecoveryServices
 - Geldige Azure inloggegevens of Service Principal credentials
-- Minimaal Contributor role actief
+- Minimaal Contributor role eligible
 
 ---
 
