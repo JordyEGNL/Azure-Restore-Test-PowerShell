@@ -877,7 +877,7 @@ do {
 
 if ($cleanupInput -eq "ja") {
     Write-Host ""
-    Write-Host "  Laatste bevestiging — dit verwijdert alles inclusief de herstelde VM." -ForegroundColor Red
+    Write-Host "  Laatste bevestiging — dit verwijdert alles de resource group '$ResourceGroupName'" -ForegroundColor Red
     do {
         $confirmCleanup = (Read-Host "  Typ 'VERWIJDER' om te bevestigen, of druk Enter om te annuleren").Trim()
         if ([string]::IsNullOrWhiteSpace($confirmCleanup)) { $confirmCleanup = "annuleren" }
@@ -889,8 +889,25 @@ if ($cleanupInput -eq "ja") {
 
     if ($confirmCleanup -eq "VERWIJDER") {
         Write-Step "Resource group '$ResourceGroupName' wordt verwijderd..."
-        Remove-AzResourceGroup -Name $ResourceGroupName -Force | Out-Null
-        Write-OK "Resource group '$ResourceGroupName' succesvol verwijderd."
+
+        # Controleer op locks
+        $locks = Get-AzResourceLock -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
+        if ($locks) {
+            Write-Host "  ⚠ Resource group heeft een of meerdere locks. Deze worden verwijderd..." -ForegroundColor Yellow
+            foreach ($lock in $locks) {
+                Remove-AzResourceLock -LockId $lock.LockId -Force | Out-Null
+                Write-Host "  🔓 Lock verwijderd: $($lock.Name)" -ForegroundColor Cyan
+            }
+        }
+
+        # Nu pas verwijderen
+        Remove-AzResourceGroup -Name $ResourceGroupName -Force -ErrorAction SilentlyContinue
+        if ($?) {
+            Write-OK "Resource group '$ResourceGroupName' succesvol verwijderd."
+        } else {
+            Write-Host "  ❌ Verwijderen mislukt. Controleer de rechten of verwijder de resource group handmatig." -ForegroundColor Red
+        }
+
         Disconnect-AzAccount | Out-Null
         Write-OK "Succesvol uitgelogd van Azure."
     } else {
