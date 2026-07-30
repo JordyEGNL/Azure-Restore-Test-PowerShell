@@ -1157,31 +1157,43 @@ do {
     }
 } while ($null -eq $cleanupInput)
 
-if ($cleanupInput -eq "ja") {
-    Write-Host ""
-    Write-Host "  Laatste bevestiging — dit verwijdert alles inclusief de herstelde VM." -ForegroundColor Red
-    do {
-        $confirmCleanup = (Read-Host "  Typ 'VERWIJDER' om te bevestigen, of druk Enter om te annuleren").Trim()
-        if ([string]::IsNullOrWhiteSpace($confirmCleanup)) { $confirmCleanup = "annuleren" }
-        if ($confirmCleanup -notin @("VERWIJDER", "annuleren")) {
-            Write-Host "  ⚠ Typ exact 'VERWIJDER' of druk Enter om te annuleren." -ForegroundColor Red
-            $confirmCleanup = $null
-        }
-    } while ($null -eq $confirmCleanup)
+if ($confirmCleanup -eq "VERWIJDER") {
+    Write-Step "Resource group '$ResourceGroupName' wordt verwijderd..."
 
-    if ($confirmCleanup -eq "VERWIJDER") {
-        Write-Step "Resource group '$ResourceGroupName' wordt verwijderd..."
-        Remove-AzResourceGroup -Name $ResourceGroupName -Force | Out-Null
-        Write-OK "Resource group '$ResourceGroupName' succesvol verwijderd."
+    # Controleer op locks
+    $locks = Get-AzResourceLock -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
+    $lockFailed = $false
+
+    if ($locks) {
+        Write-Host "  ⚠ Resource group heeft een of meerdere locks. Deze worden verwijderd..." -ForegroundColor Yellow
+        foreach ($lock in $locks) {
+            try {
+                Remove-AzResourceLock -LockId $lock.LockId -Force -ErrorAction Stop | Out-Null
+                Write-Host "  🔓 Lock verwijderd: $($lock.Name)" -ForegroundColor Cyan
+            } catch {
+                Write-Host "  ❌ Lock '$($lock.Name)' kon niet worden verwijderd. Onvoldoende rechten." -ForegroundColor Red
+                Write-Host "     Vraag een Owner of User Access Administrator om de lock te verwijderen." -ForegroundColor Yellow
+                $lockFailed = $true
+            }
+        }
+    }
+
+    if ($lockFailed) {
+        Write-Host "  ⚠ Verwijderen afgebroken. Verwijder de lock(s) handmatig en probeer opnieuw." -ForegroundColor Red
+    } else {
+        # Nu pas verwijderen
+        Remove-AzResourceGroup -Name $ResourceGroupName -Force -ErrorAction SilentlyContinue
+        if ($?) {
+            Write-OK "Resource group '$ResourceGroupName' succesvol verwijderd."
+        } else {
+            Write-Host "  ❌ Verwijderen mislukt. Controleer de rechten of verwijder de resource group handmatig." -ForegroundColor Red
+        }
+
         Disconnect-AzAccount | Out-Null
         Write-OK "Succesvol uitgelogd van Azure."
-    } else {
-        Write-Host "  ℹ Verwijderen geannuleerd. Resource group blijft bestaan." -ForegroundColor Yellow
     }
 } else {
-    Write-Host ""
-    Write-Host "  ℹ Omgeving blijft bestaan. Verwijder later handmatig via:" -ForegroundColor Yellow
-    Write-Host "    Remove-AzResourceGroup -Name $ResourceGroupName -Force" -ForegroundColor White
+    Write-Host "  ℹ Verwijderen geannuleerd. Resource group blijft bestaan." -ForegroundColor Yellow
 }
 
 Write-Host ""
