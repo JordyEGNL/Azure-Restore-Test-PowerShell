@@ -494,6 +494,7 @@ if ($null -eq $sa) {
         -Location $Region `
         -SkuName Standard_LRS `
         -Kind StorageV2 `
+	    -MinimumTlsVersion "TLS1_2" `
         -Tag $Tags | Out-Null
     Write-OK "Storage account aangemaakt: $StorageAccountName"
 } else {
